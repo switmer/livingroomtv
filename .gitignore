@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# Swift / Mac build
+.build/
+mac/LivingRoomTV/.build/
+mac/LivingRoomTV/dist/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Local secrets — never commit
+.env
+.env.local
+*.p12
+*.cer
+
+# create-dmg leftover artifacts (intermediate read-write DMGs)
+rw.*.dmg
+mac/LivingRoomTV/Resources/dmg/rw.*.dmg
