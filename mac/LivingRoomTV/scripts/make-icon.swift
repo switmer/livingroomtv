@@ -32,7 +32,7 @@ let targets: [(Int, Int, String)] = [
 ]
 
 func render(pixels: Int) -> Data? {
-    let size = CGFloat(pixels)
+    let canvasSize = CGFloat(pixels)
     let cs = CGColorSpaceCreateDeviceRGB()
     guard let ctx = CGContext(
         data: nil, width: pixels, height: pixels,
@@ -40,8 +40,37 @@ func render(pixels: Int) -> Data? {
         space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     ) else { return nil }
 
-    // Rounded rectangle mask (macOS "squircle" approximation).
+    // Inset the icon body so a soft drop shadow has somewhere to land. Apple
+    // app icons sit ~5% in from the canvas edge for exactly this reason; a
+    // full-bleed squircle has no margin to render shadow into.
+    let margin = canvasSize * 0.05
+    let size = canvasSize - margin * 2
     let radius = size * 0.225
+
+    // Drop shadow: drawn at canvas level (before any clip / translate) so the
+    // shadow blurs into the margin region. The fill is throwaway — it gets
+    // covered by the gradient below — but `setShadow` needs a drawn shape to
+    // cast a shadow from.
+    let outerPath = CGPath(
+        roundedRect: CGRect(x: margin, y: margin, width: size, height: size),
+        cornerWidth: radius, cornerHeight: radius, transform: nil
+    )
+    ctx.saveGState()
+    ctx.setShadow(
+        offset: CGSize(width: 0, height: -canvasSize * 0.012),
+        blur: canvasSize * 0.045,
+        color: CGColor(gray: 0, alpha: 0.45)
+    )
+    ctx.addPath(outerPath)
+    ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+    ctx.fillPath()
+    ctx.restoreGState()
+
+    // Translate so the rest of the drawing code can use (0, 0) as the icon's
+    // top-left corner and `size` as the icon's working dimension.
+    ctx.translateBy(x: margin, y: margin)
+
+    // Rounded rectangle mask (macOS "squircle" approximation).
     let rect = CGRect(x: 0, y: 0, width: size, height: size)
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     ctx.addPath(path)
@@ -121,6 +150,14 @@ func render(pixels: Int) -> Data? {
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.85))
         ctx.fillPath()
     }
+
+    // Thin inner highlight stroke around the squircle edge — gives the tile
+    // crisp definition against any background. Stays inside the clip region
+    // so it follows the rounded corners exactly.
+    ctx.addPath(path)
+    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.22))
+    ctx.setLineWidth(max(1, size * 0.006))
+    ctx.strokePath()
 
     guard let cgImage = ctx.makeImage() else { return nil }
     let rep = NSBitmapImageRep(cgImage: cgImage)
