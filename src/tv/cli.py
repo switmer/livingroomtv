@@ -146,6 +146,12 @@ def discover(
         return
     if not devices:
         typer.echo("No Apple TVs found.")
+        typer.echo("")
+        typer.echo("Multicast discovery may be unreliable on this network (common on macOS 26).")
+        typer.echo("Try these:")
+        typer.echo("  - Confirm the Apple TV is on:  dns-sd -B _airplay._tcp local")
+        typer.echo("  - Pair by IP if you know it:   tv pair --host <ip>")
+        typer.echo("  - Check Local Network access:  System Settings → Privacy & Security → Local Network")
         return
     default_id = cfg.default_device_id()
     for d in devices:
@@ -160,14 +166,24 @@ def discover(
 @app.command()
 def pair(
     device_id: Optional[str] = typer.Option(None, "--id", help="Target device identifier."),
+    host: Optional[str] = typer.Option(
+        None, "--host",
+        help="Apple TV IP or hostname. Bypasses multicast discovery — useful "
+             "when `tv discover` returns no devices but you know the IP "
+             "(check `dns-sd -B _airplay._tcp local` or your router).",
+    ),
 ):
-    """Interactively pair with the Apple TV. Run this once."""
+    """Interactively pair with the Apple TV. Run this once.
+
+    On networks where multicast mDNS is unreliable (common on macOS 26),
+    pass --host with your Apple TV's LAN IP to bypass discovery.
+    """
     from tv.adapters import apple_tv
 
     def pin_provider(protocol_name: str) -> str:
         return typer.prompt(f"Enter the 4-digit PIN shown on the TV for {protocol_name}")
 
-    paired = _run(apple_tv.pair_device(device_id, pin_provider))
+    paired = _run(apple_tv.pair_device(device_id, pin_provider, host=host))
     typer.secho(f"Paired protocols: {', '.join(paired.keys())}", fg=typer.colors.GREEN)
 
 

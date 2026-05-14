@@ -64,12 +64,61 @@ class DiscoveredDevice:
         }
 
 
-async def scan(timeout: float = 5.0, identifier: str | None = None) -> list[BaseConfig]:
+async def scan(
+    timeout: float = 5.0,
+    identifier: str | None = None,
+    hosts: list[str] | None = None,
+) -> list[BaseConfig]:
+    """Discover Apple TVs.
+
+    Tries broadcast mDNS first; if it returns nothing AND we have cached hosts
+    for the requested identifier (or any cached hosts when `identifier` is
+    None), retries with directed scan against those hosts. This handles the
+    case where macOS multicast mDNS is unreliable (see ROADMAP A8) but the
+    device is still reachable by IP.
+
+    Pass `hosts` explicitly to force a directed scan and bypass broadcast.
+    """
     loop = asyncio.get_running_loop()
     kwargs: dict[str, Any] = {"timeout": timeout}
     if identifier:
         kwargs["identifier"] = identifier
+    if hosts is not None:
+        kwargs["hosts"] = hosts
+        return await pyatv.scan(loop, **kwargs)
+
+    try:
+        configs = await pyatv.scan(loop, **kwargs)
+    except OSError as exc:
+        # Errno 51 (ENETUNREACH) is a strong signal of multicast trouble —
+        # most commonly Local Network permission denial on macOS 26, but also
+        # VPN/filter/routing issues. Fall through to the cached-host retry
+        # rather than letting the exception kill the command.
+        if exc.errno == 51:
+            configs = []
+        else:
+            raise
+
+    if configs:
+        return configs
+
+    # Broadcast returned nothing. Try the cached-host fallback.
+    cached_hosts = _cached_hosts_for(identifier)
+    if not cached_hosts:
+        return configs
+
+    kwargs["hosts"] = cached_hosts
     return await pyatv.scan(loop, **kwargs)
+
+
+def _cached_hosts_for(identifier: str | None) -> list[str]:
+    """Return the list of known LAN hosts for a device, from the address cache."""
+    addresses = cfg.load_addresses()
+    if identifier:
+        entry = addresses.get(identifier)
+        return [entry["host"]] if entry and entry.get("host") else []
+    # No identifier requested → return every cached host (for plain discover).
+    return [v["host"] for v in addresses.values() if v.get("host")]
 
 
 def summarize(atv_config: BaseConfig) -> DiscoveredDevice:
@@ -82,14 +131,37 @@ def summarize(atv_config: BaseConfig) -> DiscoveredDevice:
     )
 
 
-async def pair_device(device_id: str | None, pin_provider) -> dict[str, str]:
+async def pair_device(
+    device_id: str | None,
+    pin_provider,
+    host: str | None = None,
+) -> dict[str, str]:
     """Pair with the target Apple TV. `pin_provider` is a callable returning the 4-digit pin string.
 
     Returns a dict of {protocol_name: credentials_string} for paired protocols.
+
+    When `host` is given, pairs against that exact IP/hostname via directed
+    scan — bypassing multicast mDNS entirely. Use this when broadcast
+    discovery is broken (ROADMAP A8) and you know the device's IP from
+    another channel (e.g. `dns-sd -L`, your router's DHCP table).
+
+    Cache fallback during pairing is intentionally NOT applied: stale cache
+    entries could point at a different physical device. The user has to
+    either run discovery or pass --host explicitly.
     """
-    configs = await scan(identifier=device_id) if device_id else await scan()
-    if not configs:
-        raise RuntimeError("No Apple TV found on the network.")
+    if host:
+        configs = await scan(timeout=5.0, identifier=device_id, hosts=[host])
+        if not configs:
+            raise RuntimeError(f"No Apple TV found at host {host}.")
+    else:
+        configs = await scan(identifier=device_id) if device_id else await scan()
+        if not configs:
+            raise RuntimeError(
+                "No Apple TV found on the network.\n"
+                "  Multicast discovery may be unreliable on this machine.\n"
+                "  If you know your Apple TV's IP, try:  tv pair --host <ip>\n"
+                "  To find it via Bonjour:  dns-sd -B _airplay._tcp local"
+            )
     atv_config = configs[0]
 
     paired: dict[str, str] = {}
