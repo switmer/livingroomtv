@@ -85,6 +85,63 @@ final class StatusStore: ObservableObject {
         }
     }
 
+    // MARK: - First-run onboarding
+
+    enum OnboardingState: Equatable {
+        case checking         // initial probe in flight; render nothing
+        case cliMissing       // `tv` binary not on PATH
+        case needsPairing     // CLI present, no Apple TV pairing yet
+        case ready            // everything in place; main UI takes over
+    }
+
+    @Published var onboarding: OnboardingState = .checking
+
+    /// User clicked "Skip" on the onboarding sheet — suppress for this session
+    /// only. Re-evaluates next launch so they get nudged again until they're
+    /// actually set up.
+    @Published var onboardingSuppressed: Bool = false
+
+    /// Whether the onboarding sheet should be visible right now.
+    var shouldShowOnboarding: Bool {
+        if onboardingSuppressed { return false }
+        switch onboarding {
+        case .cliMissing, .needsPairing: return true
+        case .checking, .ready: return false
+        }
+    }
+
+    /// Probe the CLI for setup state. Order of checks:
+    ///   1. Is `tv` binary present?    → .cliMissing if not
+    ///   2. `tv setup-status --json`   → reads ~/.config/tv/credentials.json
+    ///   3. ready iff Apple TV paired
+    func refreshOnboarding() {
+        Task { @MainActor in
+            let path = TVCommandRunner.binaryPath
+            guard FileManager.default.isExecutableFile(atPath: path) else {
+                onboarding = .cliMissing
+                return
+            }
+            struct Setup: Decodable {
+                let ready: Bool
+                let appleTvPaired: Bool
+                enum CodingKeys: String, CodingKey {
+                    case ready
+                    case appleTvPaired = "apple_tv_paired"
+                }
+            }
+            do {
+                let s: Setup = try await TVCommandRunner.runJSON(["setup-status", "--json"])
+                onboarding = s.ready ? .ready : .needsPairing
+            } catch {
+                // CLI present but the command failed — most likely an older
+                // CLI without `setup-status`. Treat as needsPairing so the
+                // user at least sees the pair prompt; they'll update via the
+                // `install.sh` they ran most recently.
+                onboarding = .needsPairing
+            }
+        }
+    }
+
     /// Hard-flip to Away when a CLI command just told us the device isn't
     /// reachable — the error is a stronger signal than the time-based
     /// disconnect heuristic. Cancels any pending power transition since it
@@ -159,6 +216,7 @@ final class StatusStore: ObservableObject {
         // Auto-start on construction so the menu bar label is live before the popup opens.
         start()
         refreshAIStatus()
+        refreshOnboarding()
     }
 
     func start() {

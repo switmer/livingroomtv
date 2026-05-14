@@ -72,6 +72,12 @@ struct MainView: View {
                 .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
                 .allowsHitTesting(false)
         )
+        // First-run onboarding takes over the popup when CLI is missing or
+        // Apple TV isn't paired. Suppressed in-session by the Skip button.
+        .sheet(isPresented: .constant(store.shouldShowOnboarding)) {
+            OnboardingSheet()
+                .environmentObject(store)
+        }
     }
 
     // MARK: - On state

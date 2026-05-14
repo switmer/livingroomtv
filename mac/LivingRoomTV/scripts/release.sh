@@ -76,16 +76,29 @@ echo "==> Assemble bundle"
 cp "${BUILD_DIR}/${APP_NAME}" "${MACOS}/${APP_NAME}"
 cp "Resources/Info.plist" "${CONTENTS}/Info.plist"
 
-# Repackage SPM resource bundles into proper macOS bundle structure so codesign
-# accepts them (matches what build-app.sh does for ad-hoc signing).
+# Stage SPM resource bundles into Contents/Resources/ where Bundle.module's
+# accessor expects them (it checks Bundle.main.resourceURL, NOT Contents/MacOS/).
+#
+# SPM emits the bundle in one of two shapes depending on build flags:
+#   - Single-arch `swift build`: FLAT — PNGs sit directly under the .bundle dir
+#   - Universal `swift build --arch arm64 --arch x86_64`: PROPER — uses Xcode
+#     build system which produces Contents/Info.plist + Contents/Resources/
+#
+# Handle both. The proper case = straight copy. The flat case = wrap into
+# Contents/Resources/ and write a minimal Info.plist so codesign accepts it.
 for b in "${BUILD_DIR}"/*.bundle; do
     [ -e "$b" ] || continue
     bundle_name="$(basename "$b")"
-    dest="${MACOS}/${bundle_name}"
-    mkdir -p "${dest}/Contents/Resources"
-    find "$b" -mindepth 1 -maxdepth 1 -exec cp -R {} "${dest}/Contents/Resources/" \;
-    bundle_id="com.stevewitmer.LivingRoomTV.${bundle_name%.bundle}"
-    cat > "${dest}/Contents/Info.plist" <<PLIST
+    dest="${RESOURCES}/${bundle_name}"
+
+    if [ -f "${b}/Contents/Info.plist" ]; then
+        cp -R "$b" "${RESOURCES}/"
+        echo "   + copied ${bundle_name} (already proper macOS bundle)"
+    else
+        mkdir -p "${dest}/Contents/Resources"
+        find "$b" -mindepth 1 -maxdepth 1 -exec cp -R {} "${dest}/Contents/Resources/" \;
+        bundle_id="com.stevewitmer.LivingRoomTV.${bundle_name%.bundle}"
+        cat > "${dest}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -100,7 +113,8 @@ for b in "${BUILD_DIR}"/*.bundle; do
 </dict>
 </plist>
 PLIST
-    echo "   + repackaged ${bundle_name}"
+        echo "   + repackaged ${bundle_name} (wrapped flat SPM output)"
+    fi
 done
 
 # -- Sign with Developer ID ---------------------------------------------------
@@ -110,7 +124,7 @@ echo "==> Sign with Developer ID"
 # enables it; we sign nested bundles first, then the outer .app.
 codesign --force --options runtime --timestamp \
     --sign "${DEVELOPER_ID_APPLICATION}" \
-    "${MACOS}"/*.bundle 2>/dev/null || true
+    "${RESOURCES}"/*.bundle 2>/dev/null || true
 codesign --force --options runtime --timestamp \
     --sign "${DEVELOPER_ID_APPLICATION}" \
     "${APP_DIR}"

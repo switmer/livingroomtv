@@ -515,6 +515,35 @@ def ai_status(json_out: bool = typer.Option(False, "--json")):
         typer.echo("configured" if configured else "not configured")
 
 
+@app.command("setup-status")
+def setup_status(json_out: bool = typer.Option(False, "--json")):
+    """Report what setup steps remain. Cheap (file checks only, no SDK imports).
+
+    Used by the Mac app's onboarding sheet to decide which state to show
+    (CLI-missing isn't checked here — if this command runs, the CLI is present).
+    """
+    apple_tv_paired = (cfg.CONFIG_DIR / "credentials.json").exists()
+    lg_paired = (cfg.CONFIG_DIR / "lg.json").exists()
+    # AI key is optional — its absence shouldn't block "ready"
+    import os as _os
+    ai_configured = bool(_os.environ.get("ANTHROPIC_API_KEY")) or _API_KEY_PATH.exists()
+
+    payload = {
+        "cli_present": True,
+        "apple_tv_paired": apple_tv_paired,
+        "lg_paired": lg_paired,
+        "ai_configured": ai_configured,
+        "ready": apple_tv_paired,
+    }
+    if json_out:
+        typer.echo(state_fmt.as_json(payload))
+    else:
+        typer.echo(f"apple_tv: {'paired' if apple_tv_paired else 'NOT PAIRED'}")
+        typer.echo(f"lg:       {'paired' if lg_paired else 'not paired (optional)'}")
+        typer.echo(f"ai:       {'configured' if ai_configured else 'not configured (optional)'}")
+        typer.echo(f"ready:    {payload['ready']}")
+
+
 @app.command("ai-clear")
 def ai_clear():
     """Remove the saved Anthropic API key file (env vars are not touched)."""

@@ -31,14 +31,27 @@ cp ".build/release/${APP_NAME}" "${MACOS}/${APP_NAME}"
 cp "Resources/Info.plist" "${CONTENTS}/Info.plist"
 
 # SPM generates a per-target resource bundle alongside the binary as a flat
-# directory of files. Modern codesign rejects flat .bundle directories — they
-# must be proper macOS bundles with Contents/Info.plist + Contents/Resources/.
-# Bundle.module's lookups (url(forResource:withExtension:)) resolve through
-# Contents/Resources/ on macOS, so this layout still works at runtime.
+# directory of files. Two transforms needed for it to work inside a .app:
+#   1. Modern codesign rejects flat .bundle dirs — must have Contents/Info.plist
+#      + Contents/Resources/ layout.
+#   2. The SPM-generated `Bundle.module` accessor (resource_bundle_accessor.swift)
+#      looks for the bundle in `Bundle.main.resourceURL` (Contents/Resources/)
+#      and `Bundle.main.bundleURL` (the .app root) — NOT in Contents/MacOS/.
+#      So the bundle must live in Contents/Resources/, not next to the binary.
 for b in .build/release/*.bundle; do
   [ -e "$b" ] || continue
   bundle_name="$(basename "$b")"
-  dest="${MACOS}/${bundle_name}"
+  dest="${RESOURCES}/${bundle_name}"
+
+  # If SPM already emitted a proper macOS bundle (Xcode build system path,
+  # e.g. universal builds), copy as-is. Don't re-wrap or we double-nest the
+  # Contents/Resources/ directory and Bundle.module can't find the icons.
+  if [ -f "$b/Contents/Info.plist" ]; then
+    cp -R "$b" "${RESOURCES}/"
+    echo "   + copied $bundle_name (already proper macOS bundle)"
+    continue
+  fi
+
   mkdir -p "${dest}/Contents/Resources"
   # Copy all resource files into Contents/Resources/
   find "$b" -mindepth 1 -maxdepth 1 -exec cp -R {} "${dest}/Contents/Resources/" \;
